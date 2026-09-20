@@ -1,0 +1,41 @@
+{
+  "name": "bilibili-reader",
+  "version": "0.1.0+codex.20260823170730",
+  "description": "Search and read public Bilibili videos through metadata, subtitles, DASH streams, audio segments, and sampled video frames.",
+  "author": {
+    "name": "HengdianZou",
+    "email": "hd18512614931@gmail.com",
+    "url": "https://github.com/zou-handy"
+  },
+  "license": "MIT",
+  "keywords": [
+    "bilibili",
+    "video",
+    "search",
+    "subtitles",
+    "playurl",
+    "audio",
+    "frames",
+    "vision"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Bilibili Reader",
+    "shortDescription": "Search Bilibili and read public videos.",
+    "longDescription": "Searches public Bilibili videos, resolves multipart metadata and cid values, reads official subtitles, exposes expiring DASH playurl streams, returns short audio segments, and samples video frames for visual understanding.",
+    "developerName": "HengdianZou",
+    "category": "Research",
+    "capabilities": [
+      "Search",
+      "Read",
+      "Audio",
+      "Vision"
+    ],
+    "defaultPrompt": [
+      "Search Bilibili for a topic and summarize the best results.",
+      "Read this Bilibili video and summarize its transcript.",
+      "Inspect the playable DASH streams for this BV number."
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "bilibili-reader": {
+      "command": "node",
+      "args": ["./scripts/server.mjs"],
+      "cwd": ".",
+      "env_vars": ["BILIBILI_COOKIE", "PATH", "TEMP", "TMP", "USERPROFILE"],
+      "startup_timeout_sec": 15,
+      "tool_timeout_sec": 180
+    }
+  }
+}
