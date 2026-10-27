@@ -131,6 +131,59 @@ async function api(pathname, params, options = {}) {
   return requestJson(url, options);
 }
 
+const MIXIN_KEY_ENC_TAB = [
+  46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+  33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
+  61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11,
+  36, 20, 34, 44, 52
+];
+
+let cachedMixinKey = "";
+let mixinKeyExpiresAt = 0;
+
+async function getMixinKey() {
+  const now = Date.now();
+  if (cachedMixinKey && now < mixinKeyExpiresAt) {
+    return cachedMixinKey;
+  }
+  try {
+    const nav = await api("/x/web-interface/nav", {}, { referer: HOME_URL });
+    const imgUrl = nav?.wbi_img?.img_url || "";
+    const subUrl = nav?.wbi_img?.sub_url || "";
+    const imgKey = imgUrl.split("/").pop().split(".")[0];
+    const subKey = subUrl.split("/").pop().split(".")[0];
+    const raw = imgKey + subKey;
+    cachedMixinKey = MIXIN_KEY_ENC_TAB.map((n) => raw[n]).join("").slice(0, 32);
+    mixinKeyExpiresAt = now + 3600000;
+    return cachedMixinKey;
+  } catch {
+    return cachedMixinKey || "";
+  }
+}
+
+function md5(str) {
+  return crypto.createHash("md5").update(str).digest("hex");
+}
+
+export async function signWbiParams(params = {}) {
+  const mixinKey = await getMixinKey();
+  const signedParams = {
+    ...params,
+    wts: Math.round(Date.now() / 1000)
+  };
+  const sortedKeys = Object.keys(signedParams).sort();
+  const query = sortedKeys
+    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(signedParams[k]).replace(/[!'()*]/g, ""))}`)
+    .join("&");
+  const w_rid = md5(query + mixinKey);
+  return { ...signedParams, w_rid };
+}
+
+export async function wbiApi(pathname, params, options = {}) {
+  const signed = await signWbiParams(params);
+  return api(pathname, signed, options);
+}
+
 export function normalizeBvid(value) {
   const match = String(value || "").match(/BV[0-9A-Za-z]{10}/i);
   if (!match) throw new BilibiliError("Expected a Bilibili BV number or video URL");
@@ -343,10 +396,17 @@ export async function getSubtitleData(video, { page = 1, preferredLanguage } = {
   const info = await getVideoInfo(video, { page });
   const bvid = info.bvid;
   const cid = info.selected_page.cid;
-  const player = await api("/x/player/v2", { bvid, cid }, {
-    referer: `https://www.bilibili.com/video/${bvid}`
-  });
-  const subtitles = Array.isArray(player.subtitle?.subtitles) ? player.subtitle.subtitles : [];
+  let player = null;
+  try {
+    player = await wbiApi("/x/player/wbi/v2", { bvid, cid }, {
+      referer: `https://www.bilibili.com/video/${bvid}`
+    });
+  } catch {
+    player = await api("/x/player/v2", { bvid, cid }, {
+      referer: `https://www.bilibili.com/video/${bvid}`
+    });
+  }
+  const subtitles = Array.isArray(player?.subtitle?.subtitles) ? player.subtitle.subtitles : [];
   const selected = chooseSubtitle(subtitles, preferredLanguage);
   const available = subtitles.map((item) => ({
     id: item.id,
@@ -354,11 +414,21 @@ export async function getSubtitleData(video, { page = 1, preferredLanguage } = {
     language_name: item.lan_doc,
     ai_generated: Boolean(item.ai_type)
   }));
-  if (!selected) return { info, available, selected: null, body: [] };
+  const viewPoints = Array.isArray(player?.view_points)
+    ? player.view_points
+        .map((pt) => ({
+          start_seconds: Number(pt.from ?? pt.start ?? 0),
+          title: String(pt.content ?? pt.title ?? "").trim()
+        }))
+        .filter((pt) => pt.title)
+    : [];
+
+  if (!selected) return { info, available, selected: null, view_points: viewPoints, body: [] };
 
   let subtitleUrl = selected.subtitle_url || selected.subtitleUrl;
   if (subtitleUrl?.startsWith("//")) subtitleUrl = `https:${subtitleUrl}`;
-  if (!subtitleUrl) throw new BilibiliError("The selected subtitle has no downloadable URL");
+  if (!subtitleUrl) return { info, available, selected: null, view_points: viewPoints, body: [] };
+
   const payload = await requestJson(subtitleUrl, {
     referer: `https://www.bilibili.com/video/${bvid}`,
     envelope: false
@@ -372,7 +442,8 @@ export async function getSubtitleData(video, { page = 1, preferredLanguage } = {
       language_name: selected.lan_doc,
       ai_generated: Boolean(selected.ai_type)
     },
-    body: Array.isArray(payload.body) ? payload.body : []
+    view_points: viewPoints,
+    body: Array.isArray(payload?.body) ? payload.body : []
   };
 }
 
@@ -384,12 +455,13 @@ export async function readVideo(video, {
 } = {}) {
   const subtitle = await getSubtitleData(video, { page, preferredLanguage });
   const info = subtitle.info;
-  if (!subtitle.selected) {
+  if (!subtitle.selected || !subtitle.body.length) {
     return {
       readable: false,
       reason: "No official subtitle is available for this page.",
-      next_step: "Call get_audio_segment for spoken content and get_video_frames for visual content.",
+      next_step: "Track 2 Fallback: Call get_audio_segment for spoken content or get_video_frames for visual content.",
       video: info,
+      view_points: subtitle.view_points || [],
       available_subtitles: subtitle.available
     };
   }
@@ -404,6 +476,7 @@ export async function readVideo(video, {
     video: info,
     selected_subtitle: subtitle.selected,
     available_subtitles: subtitle.available,
+    view_points: subtitle.view_points || [],
     transcript: chunk,
     transcript_offset: safeOffset,
     transcript_returned_chars: chunk.length,
